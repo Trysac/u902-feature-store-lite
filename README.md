@@ -1,48 +1,46 @@
 # feature-store-lite
 
-[![PyPI version](https://img.shields.io/pypi/v/trysac-feature-store-lite)](https://pypi.org/project/trysac-feature-store-lite/)
-[![License: MIT](https://img.shields.io/pypi/l/trysac-feature-store-lite)](LICENSE)
-[![CI](https://github.com/Trysac/u902-feature-store-lite/actions/workflows/ci.yml/badge.svg)](https://github.com/Trysac/u902-feature-store-lite/actions/workflows/ci.yml)
+Training sets built with a plain join on entity id use feature values recorded after the label time, so models look better offline than in production (label leakage). Full feature stores need a cluster and a platform team. This library keeps feature rows in SQLite, builds training sets with point-in-time joins and TTLs, and materialises the latest values to an online table for serving.
 
-Offline and online feature store on SQLite with point-in-time correct joins that never leak future values into training data
+## Installation
 
-## Problem
-
-Describe in two or three sentences the concrete problem this utility solves, who hits it, and what
-they do today without it. Replace this paragraph when the first real feature lands.
-
-## Install
-
-```sh
-pip install trysac-feature-store-lite
-# or
-uv add trysac-feature-store-lite
+```bash
+pip install feature-store-lite
 ```
-
-Requires Python 3.10 or newer. No runtime dependencies.
 
 ## Usage
 
 ```python
-import feature_store_lite
+from datetime import datetime, timedelta, timezone
+from feature_store_lite import FeatureStore, FeatureView
 
-# normalize() trims surrounding whitespace and lower-cases the text.
-print(feature_store_lite.normalize("  Hello World "))  # -> "hello world"
-
-# Blank input is rejected explicitly instead of returning an empty string.
-try:
-    feature_store_lite.normalize("   ")
-except ValueError as exc:
-    print(f"rejected: {exc}")
+store = FeatureStore()
+store.register(FeatureView("driver_stats", "driver_id", ("trips",), ttl=timedelta(hours=2)))
+t0 = datetime(2026, 1, 5, 10, 0, tzinfo=timezone.utc)
+store.ingest("driver_stats", [{"driver_id": 1001, "event_timestamp": t0, "trips": 5}])
+hist = store.get_historical_features(
+    [{"driver_id": 1001, "event_timestamp": t0}], ["driver_stats:trips"]
+)
+store.materialize("driver_stats", t0 - timedelta(hours=1), t0 + timedelta(hours=1))
+online = store.get_online_features(["driver_stats:trips"], [1001])
 ```
 
-## Documentation
+## API Summary
 
-- [Architecture](docs/ARCHITECTURE.md) and [decisions](docs/decisions/)
-- [Testing](docs/TESTING.md) and [security](docs/SECURITY.md)
-- [Project record](docs/PROJECT.md) and [stack](docs/STACK.md)
-- [Changelog](CHANGELOG.md) and [contributing guide](CONTRIBUTING.md)
+- `FeatureView(name, entity, features, ttl=None, timestamp_field='event_timestamp', created_field='created_timestamp')`: Defines features. Names must match `[a-z][a-z0-9_]{0,62}`.
+- `FeatureStore(path=':memory:', *, max_rows=1_000_000)`: Manages storage.
+- `register(view)`: Adds a schema.
+- `ingest(view_name, rows)`: Adds historical feature rows. Refuses if `max_rows` capacity is exceeded (`store_full`).
+- `get_historical_features(entity_rows, features)`: Joins historical data point-in-time (`f <= t` and `f >= t - ttl`).
+- `materialize(view_name, start, end)`: Updates online store for features in range.
+- `get_online_features(features, entity_ids)`: Retrieves latest values.
 
-## License
+Errors (raised as `FeatureStoreError` with code `ErrorCode`): `naive_timestamp` (requires timezone-aware datetime), `unknown_view`, `unknown_feature`, `missing_column`, `too_many_rows` (limit: 100,000 entity rows), `store_full`, `invalid_value`, `invalid_view`.
 
-[MIT](LICENSE) (c) 2026 Miguel Gomez
+## Why not Feast?
+
+Feast requires a registry service or cloud infrastructure. `feature-store-lite` provides point-in-time semantics in a single SQLite file, ideal for small teams or local testing.
+
+## Security
+
+See [docs/SECURITY.md](docs/SECURITY.md).
