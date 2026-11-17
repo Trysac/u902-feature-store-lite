@@ -1,29 +1,19 @@
 # Architecture
 
-## Purpose
+## Overview
 
-`trysac-feature-store-lite` is a small, dependency-free Python library: Offline and online feature store on SQLite with point-in-time correct joins that never leak future values into training data
+`feature_store_lite` implements an offline and online feature store backed by a single SQLite database (`:memory:` or file path) with zero runtime dependencies outside the Python standard library.
 
-## Shape
+## Data Model
 
-```text
-caller code --> feature_store_lite (public API in __init__.py)
-                    |
-                    +-- pure functions, no I/O, no global state
-```
+- `views`: Stores registered `FeatureView` schemas, TTL in microseconds, and the locked entity ID type (`int` or `str`).
+- `offline_rows`: Append-only historical feature table indexed on `(view_name, entity_int/entity_str, event_ts_us, created_ts_us, seq)`.
+- `online_rows`: Serving table keyed by `(view_name, entity_key)` storing the latest materialized feature payload alongside its `(event_ts_us, created_ts_us, seq)` version tuple.
 
-- **Public API**: the names listed in `__all__` of `src/feature_store_lite/__init__.py`. Anything else is
-  internal and may change without a major version.
-- **Errors**: invalid input raises built-in exceptions (`ValueError`, `TypeError`) with a clear
-  message; the library never prints or exits.
-- **Side effects**: none. If a feature needs I/O, isolate it in its own module behind a small
-  interface and record the choice in an ADR.
+## Point-in-Time Join Algorithm
 
-## Quality contract
-
-`scripts/check.py` is the single definition of the gates; `fabrica.json` tells the factory and CI
-how to run it. See [TESTING.md](TESTING.md).
-
-## Decisions
-
-Architecture decisions are recorded in [decisions/](decisions/) as numbered ADRs.
+For each requested `FeatureView`:
+1. Fetch feature rows from `offline_rows` ordered by `(entity, event_ts_us, created_ts_us, seq)`.
+2. Sort the input `entity_rows` by `(entity_id, event_ts_us)` while retaining each row's original index.
+3. Perform a single linear merge pass per entity to locate the candidate with the largest `(event_ts_us, created_ts_us, seq)` satisfying `event_ts_us <= t` and `event_ts_us >= t - ttl`.
+4. Restore the original input order.
