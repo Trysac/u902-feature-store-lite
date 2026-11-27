@@ -4,8 +4,10 @@ Training sets built with a plain join on entity id use feature values recorded a
 
 ## Installation
 
+Not published to PyPI yet. Install it from GitHub:
+
 ```bash
-pip install feature-store-lite
+pip install "git+https://github.com/Trysac/u902-feature-store-lite"
 ```
 
 ## Usage
